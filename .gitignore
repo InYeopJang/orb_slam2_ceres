@@ -21,4 +21,9 @@ Vocabulary/ORBvoc.txt
 build/
 *~
 lib/
+!.gitignore
+.*
+*.txt
+cmake-build-debug/
+cmake-build-release/
 
