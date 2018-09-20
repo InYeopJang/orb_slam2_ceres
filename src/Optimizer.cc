@@ -267,7 +267,7 @@ int Optimizer::PoseOptimization(Frame *pFrame)
     vpEdgesMono.reserve(N);
     vnIndexEdgeMono.reserve(N);
 
-    vector<g2o::EdgeStereoSE3ProjectXYZOnlyPose*> vpEdgesStereo;
+    vector<g2o::EdgeSE3ProjectXYZOnlyPose*> vpEdgesStereo;
     vector<size_t> vnIndexEdgeStereo;
     vpEdgesStereo.reserve(N);
     vnIndexEdgeStereo.reserve(N);
@@ -287,29 +287,25 @@ int Optimizer::PoseOptimization(Frame *pFrame)
             nInitialCorrespondences++;
             pFrame->mvbOutlier[i] = false;
 
-            //SET EDGE
             Eigen::Matrix<double,2,1> obs;
             const cv::KeyPoint &kpUn = pFrame->mvKeysUn[i];
-            //const float &kp_ur = pFrame->mvuRight[i];
             obs << kpUn.pt.x, kpUn.pt.y;
 
-            g2o::EdgeStereoSE3ProjectXYZOnlyPose* e = new g2o::EdgeStereoSE3ProjectXYZOnlyPose();
+            g2o::EdgeSE3ProjectXYZOnlyPose* e = new g2o::EdgeSE3ProjectXYZOnlyPose();
 
             e->setVertex(0, dynamic_cast<g2o::OptimizableGraph::Vertex*>(optimizer.vertex(0)));
             e->setMeasurement(obs);
             const float invSigma2 = pFrame->mvInvLevelSigma2[kpUn.octave];
-            Eigen::Matrix3d Info = Eigen::Matrix3d::Identity()*invSigma2;
-            e->setInformation(Info);
+            e->setInformation(Eigen::Matrix2d::Identity()*invSigma2);
 
             g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber;
             e->setRobustKernel(rk);
-            rk->setDelta(deltaStereo);
+            rk->setDelta(deltaMono);
 
             e->fx = pFrame->fx;
             e->fy = pFrame->fy;
             e->cx = pFrame->cx;
             e->cy = pFrame->cy;
-            //e->bf = pFrame->mbf;
             cv::Mat Xw = pMP->GetWorldPos();
             e->Xw[0] = Xw.at<float>(0);
             e->Xw[1] = Xw.at<float>(1);
@@ -374,7 +370,7 @@ int Optimizer::PoseOptimization(Frame *pFrame)
 
         for(size_t i=0, iend=vpEdgesStereo.size(); i<iend; i++)
         {
-            g2o::EdgeStereoSE3ProjectXYZOnlyPose* e = vpEdgesStereo[i];
+            g2o::EdgeSE3ProjectXYZOnlyPose* e = vpEdgesStereo[i];
 
             const size_t idx = vnIndexEdgeStereo[i];
 
