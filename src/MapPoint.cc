@@ -77,6 +77,23 @@ void MapPoint::SetWorldPos(const cv::Mat &Pos)
     Pos.copyTo(mWorldPos);
 }
 
+
+    void MapPoint::BA2Pos()
+    {
+        unique_lock<mutex> lock(mMutexPos);
+        _baPos[0] = mWorldPos.at<double>(0,0);
+        _baPos[1] = mWorldPos.at<double>(1,0);
+        _baPos[2] = mWorldPos.at<double>(2,0);
+    }
+
+    void MapPoint::Pos2BA()
+    {
+        unique_lock<mutex> lock(mMutexPos);
+        mWorldPos.at<double>(0,0) = _baPos[0];
+        mWorldPos.at<double>(1,0) = _baPos[1];
+        mWorldPos.at<double>(2,0) = _baPos[2];
+    }
+
 cv::Mat MapPoint::GetWorldPos()
 {
     unique_lock<mutex> lock(mMutexPos);

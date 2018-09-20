@@ -54,6 +54,10 @@ public:
     cv::Mat GetRotation();
     cv::Mat GetTranslation();
 
+    //to ba store
+    bool Pose2BA();
+    bool BA2Pose();
+
     // Bag of Words Representation
     void ComputeBoW();
 
@@ -187,6 +191,9 @@ public:
     const int mnMaxX;
     const int mnMaxY;
     const cv::Mat mK;
+
+    // for bundle adjust store
+    double _baPose[6];
 
 
     // The following variables need to be accessed trough a mutex to be thread safe.

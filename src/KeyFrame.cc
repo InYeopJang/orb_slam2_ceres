@@ -89,6 +89,51 @@ cv::Mat KeyFrame::GetPose()
     return Tcw.clone();
 }
 
+
+    bool KeyFrame::Pose2BA()
+    {
+        unique_lock<mutex> lock(mMutexPose);
+
+        cv::Vec3f rod;
+        cv::Mat mat(3,3,CV_32F);
+        Tcw.rowRange(0,3).colRange(0,3).copyTo(mat);
+
+        if (std::abs(cv::determinant(mat)-1.0f) > 1e-6)
+        {
+            std::cout << "=============error matrix" << std::endl;
+            std::cout << mat << std::endl;
+            return false;
+        }
+
+        cv::Rodrigues(mat, rod);
+        _baPose[0] = rod(0);
+        _baPose[1] = rod(1);
+        _baPose[2] = rod(2);
+
+        //translation
+        _baPose[3] = Tcw.at<double>(0,3);
+        _baPose[4] = Tcw.at<double>(1,3);
+        _baPose[5] = Tcw.at<double>(2,3);
+
+        return true;
+
+    }
+
+    bool KeyFrame::BA2Pose()
+    {
+        unique_lock<mutex> lock(mMutexPose);
+
+        cv::Vec3f rod(_baPose[0],_baPose[1],_baPose[2]);
+
+        cv::Rodrigues(rod, Tcw.rowRange(0,3).colRange(0,3));
+
+        Tcw.at<double>(0,3) = _baPose[3];
+        Tcw.at<double>(1,3) = _baPose[4];
+        Tcw.at<double>(2,3) = _baPose[5];
+
+        return true;
+    }
+
 cv::Mat KeyFrame::GetPoseInverse()
 {
     unique_lock<mutex> lock(mMutexPose);

@@ -42,6 +42,9 @@ public:
     MapPoint(const cv::Mat &Pos, KeyFrame* pRefKF, Map* pMap);
     MapPoint(const cv::Mat &Pos,  Map* pMap, Frame* pFrame, const int &idxF);
 
+    void BA2Pos();
+    void Pos2BA();
+
     void SetWorldPos(const cv::Mat &Pos);
     cv::Mat GetWorldPos();
 
@@ -111,6 +114,9 @@ public:
 
 
     static std::mutex mGlobalMutex;
+
+    // for bundle adjust store
+    double _baPos[3];
 
 protected:    
 
