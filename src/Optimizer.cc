@@ -760,11 +760,8 @@ int Optimizer::PoseOptimization(Frame *pFrame)
             p[1] += camera[4];
             p[2] += camera[5];
 
-            // Compute the center of distortion. The sign change comes from
-            // the camera model that Noah Snavely's Bundler assumes, whereby
-            // the camera coordinate system has a negative z axis.
-            const T xp = - p[0] / p[2];
-            const T yp = - p[1] / p[2];
+            const T xp = p[0] / p[2];
+            const T yp = p[1] / p[2];
 
             const T predicted_x = xp * fx + cx;
             const T predicted_y = yp * fy + cy;
@@ -772,6 +769,21 @@ int Optimizer::PoseOptimization(Frame *pFrame)
             // The error is the difference between the predicted and observed position.
             residuals[0] = predicted_x - observed_x;
             residuals[1] = predicted_y - observed_y;
+
+            //TODO debug 检查是否差别大
+//            std::cout << "-------------------------------------------------------------------------" << std::endl;
+//            for (int i = 0; i < 6; ++i) {
+//                std::cout << camera[i] << " , ";
+//            }
+//            std::cout << std::endl;
+//
+//            for (int i = 0; i < 3; ++i) {
+//                std::cout << point[i] << " , ";
+//            }
+//            std::cout << std::endl;
+//
+//            std::cout << "observed: " << observed_x << " predict: " << predicted_x << std::endl;
+//            std::cout << "observed: " << observed_y << " predict: " << predicted_y << std::endl;
 
             return true;
         }
@@ -808,6 +820,7 @@ int Optimizer::PoseOptimization(Frame *pFrame)
                 lLocalKeyFrames.push_back(pKFi);
         }
 
+
         // Local MapPoints seen in Local KeyFrames
         list<MapPoint*> lLocalMapPoints;
         for(list<KeyFrame*>::iterator lit=lLocalKeyFrames.begin() , lend=lLocalKeyFrames.end(); lit!=lend; lit++)
@@ -825,6 +838,7 @@ int Optimizer::PoseOptimization(Frame *pFrame)
                         }
             }
         }
+
 
         // Fixed Keyframes. Keyframes that see Local MapPoints but that are not Local Keyframes
         list<KeyFrame*> lFixedCameras;
@@ -855,20 +869,64 @@ int Optimizer::PoseOptimization(Frame *pFrame)
 
             const map<KeyFrame*,size_t> observations = mp->GetObservations();
 
-            for (map<KeyFrame*,size_t>::const_iterator kit = observations.begin(); kit != observations.end(); ++kit)
+            for (map<KeyFrame*,size_t>::const_iterator ob = observations.begin(); ob != observations.end(); ++ob)
             {
-                KeyFrame* pKF = kit->first;
+                KeyFrame* pKF = ob->first;
                 if (pKF->isBad()) continue;
 
-                const cv::KeyPoint &kpUn = pKF->mvKeysUn[kit->second];
+                size_t idx = ob->second;
+
+                const cv::KeyPoint &kpUn = pKF->mvKeysUn[idx];
+
                 ceres::CostFunction* costfunc = ReprojError::Create(kpUn.pt.x, kpUn.pt.y);
-                ceres::LossFunction* lossfunc = new ceres::HuberLoss(1.0);
+                ceres::LossFunction* lossfunc = new ceres::HuberLoss(0.5);
 
                 pKF->Pose2BA();
                 mp->Pos2BA();
+
+
+
+                //test
+//                cv::Mat K = pKF->mK;
+//                cv::Mat R = pKF->GetRotation();
+//                cv::Mat t = pKF->GetTranslation();
+//                cv::Mat p = mp->GetWorldPos();
+
+                /*
+                std::cout << "==============================================" <<std::endl;
+                std::cout << R << std::endl << t << std::endl << p << std::endl;
+
+                std::cout << "----------------------------------------------" << std::endl;
+
+                pKF->BA2Pose();
+                mp->BA2Pos();
+
+                R = pKF->GetRotation();
+                t = pKF->GetTranslation();
+                p = mp->GetWorldPos();
+
+                std::cout << R << std::endl << t << std::endl << p << std::endl;
+
+                std::cout << "==============================================" <<std::endl;
+
+                 */
+//
+//                std::cout << "+++++++++++++++++++" << std::endl;
+//
+//                cv::Mat x = R * p + t;
+//                x.at<float>(0,0) /= x.at<float>(0,2);
+//                x.at<float>(0,1) /= x.at<float>(0,2);
+//                x.at<float>(0,2) = 1.0;
+//
+//                cv::Mat uv =  K * x;
+//                std::cout << " pose: " << pKF->GetPose() << std::endl;
+//                std::cout << " positoin: " << p << std::endl;
+//                std::cout << uv << " ===? " << kpUn.pt << " ===distor==" << pKF->mvKeys[idx].pt << std::endl;
+
                 problem.AddResidualBlock(costfunc, lossfunc, pKF->_baPose, mp->_baPos);
             }
         }
+
 
         //ceres options
         ceres::Solver::Options options;
@@ -903,9 +961,6 @@ int Optimizer::PoseOptimization(Frame *pFrame)
 
         // print out
         std::cout << summary.FullReport() << "\n";
-
-
-        //==============================================================================================================
 
     }
 

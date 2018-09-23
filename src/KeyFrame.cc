@@ -92,28 +92,20 @@ cv::Mat KeyFrame::GetPose()
 
     bool KeyFrame::Pose2BA()
     {
-        unique_lock<mutex> lock(mMutexPose);
+        cv::Mat R = GetRotation();
+        cv::Mat_<float> t = GetTranslation();
 
         cv::Vec3f rod;
-        cv::Mat mat(3,3,CV_32F);
-        Tcw.rowRange(0,3).colRange(0,3).copyTo(mat);
 
-        if (std::abs(cv::determinant(mat)-1.0f) > 1e-6)
-        {
-            std::cout << "=============error matrix" << std::endl;
-            std::cout << mat << std::endl;
-            return false;
-        }
-
-        cv::Rodrigues(mat, rod);
+        cv::Rodrigues(R, rod);
         _baPose[0] = rod(0);
         _baPose[1] = rod(1);
         _baPose[2] = rod(2);
 
         //translation
-        _baPose[3] = Tcw.at<double>(0,3);
-        _baPose[4] = Tcw.at<double>(1,3);
-        _baPose[5] = Tcw.at<double>(2,3);
+        _baPose[3] = t(0);
+        _baPose[4] = t(1);
+        _baPose[5] = t(2);
 
         return true;
 
@@ -121,15 +113,19 @@ cv::Mat KeyFrame::GetPose()
 
     bool KeyFrame::BA2Pose()
     {
-        unique_lock<mutex> lock(mMutexPose);
-
         cv::Vec3f rod(_baPose[0],_baPose[1],_baPose[2]);
+        cv::Mat R;
+        cv::Rodrigues(rod, R);
 
-        cv::Rodrigues(rod, Tcw.rowRange(0,3).colRange(0,3));
+        cv::Mat_<float> T = cv::Mat_<float>::eye(4,4);
 
-        Tcw.at<double>(0,3) = _baPose[3];
-        Tcw.at<double>(1,3) = _baPose[4];
-        Tcw.at<double>(2,3) = _baPose[5];
+        R.copyTo(T.rowRange(0,3).colRange(0,3));
+
+        T(0,3) = _baPose[3];
+        T(1,3) = _baPose[4];
+        T(2,3) = _baPose[5];
+
+        this->SetPose(T);
 
         return true;
     }
