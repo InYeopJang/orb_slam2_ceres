@@ -39,7 +39,113 @@
 namespace ORB_SLAM2
 {
 
-//
+
+    template<typename T> bool compute_residual(const T* const camera,
+                                               const T* const point, double observed_x, double observed_y,
+                                               T* residuals) {
+
+        static constexpr double fx = 520.908620;
+        static constexpr double fy = 521.007327;
+        static constexpr double cx = 325.141442;
+        static constexpr double cy = 249.701764;
+
+        // camera[0,1,2] are the angle-axis rotation.
+        T p[3];
+        ceres::AngleAxisRotatePoint(camera, point, p);
+
+        // camera[3,4,5] are the translation.
+        p[0] += camera[3];
+        p[1] += camera[4];
+        p[2] += camera[5];
+
+        const T xp = p[0] / p[2];
+        const T yp = p[1] / p[2];
+
+        const T predicted_x = xp * fx + cx;
+        const T predicted_y = yp * fy + cy;
+
+        // The error is the difference between the predicted and observed position.
+        residuals[0] = predicted_x - observed_x;
+        residuals[1] = predicted_y - observed_y;
+
+        return true;
+    }
+
+
+    struct ReprojError {
+        ReprojError(double observed_x, double observed_y)
+                : observed_x(observed_x), observed_y(observed_y) {}
+
+        template <typename T>
+        bool operator()(const T* const camera,
+                        const T* const point,
+                        T* residuals) const {
+            return compute_residual(camera, point, observed_x,observed_y, residuals);
+        }
+
+        static ceres::CostFunction* Create(double observed_x, double observed_y) {
+            return (new ceres::AutoDiffCostFunction<ReprojError, 2, 6, 3>(
+                    new ReprojError(observed_x, observed_y)));
+        }
+
+        double observed_x;
+        double observed_y;
+    };
+
+
+
+    struct ReprojErrorOnlyPose {
+        ReprojErrorOnlyPose(double observed_x, double observed_y, const double* const pos)
+                : observed_x(observed_x), observed_y(observed_y),_pos(pos) {}
+
+        template <typename T>
+        bool operator()(const T* const camera,
+                        T* residuals) const {
+            T point[3];
+            point[0] = T(_pos[0]);
+            point[1] = T(_pos[0]);
+            point[2] = T(_pos[0]);
+
+            return compute_residual(camera, point, observed_x,observed_y, residuals);
+        }
+
+        static ceres::CostFunction* Create(double observed_x, double observed_y,const double* const pos) {
+            return (new ceres::AutoDiffCostFunction<ReprojErrorOnlyPose, 2, 6>(
+                    new ReprojErrorOnlyPose(observed_x, observed_y, pos)));
+        }
+
+        double observed_x;
+        double observed_y;
+        const double* const _pos;
+    };
+
+    struct ReprojErrorOnlyPoint {
+        ReprojErrorOnlyPoint(double observed_x, double observed_y, const double* const pose)
+                : observed_x(observed_x), observed_y(observed_y) ,_pose(pose){}
+
+        template <typename T>
+        bool operator()(const T* const point,
+                        T* residuals) const {
+            T camera[6];
+            for (int i = 0; i < 6; i++) {
+                camera[i] = T(_pose[i]);
+            }
+
+            return compute_residual(camera, point, observed_x,observed_y, residuals);
+        }
+
+        static ceres::CostFunction* Create(double observed_x, double observed_y,double pose[6]) {
+            return (new ceres::AutoDiffCostFunction<ReprojErrorOnlyPoint, 2, 3>(
+                    new ReprojErrorOnlyPoint(observed_x, observed_y, pose)));
+        }
+
+        double observed_x;
+        double observed_y;
+        const double* const _pose;
+    };
+
+
+    //
 //void Optimizer::GlobalBundleAdjustemnt(Map* pMap, int nIterations, bool* pbStopFlag, const unsigned long nLoopKF, const bool bRobust)
 //{
 //    vector<KeyFrame*> vpKFs = pMap->GetAllKeyFrames();
@@ -389,13 +495,80 @@ int Optimizer::PoseOptimizationCeres(Frame *pFrame) {
 
     int nInitialCorrespondences = 0;
 
-    for(int i=0; i<pFrame->N; i++) {
-        MapPoint *pMP = pFrame->mvpMapPoints[i];
-        if (pMP) {
-            nInitialCorrespondences++;
+    set<MapPoint*> mappoints;
+
+
+    using MPIt = set<MapPoint*>::iterator;
+
+    for (int i = 0; i < 4; i++) {
+
+        ceres::Problem problem;
+        double pose[6];
+
+        Converter::toT6(pFrame->mTcw, pose);
+
+
+        ceres::ParameterBlockOrdering* ordering = new ceres::ParameterBlockOrdering;
+        ordering->AddElementToGroup(pose, 1);
+
+        for(int i=0; i<pFrame->N; i++) {
+            MapPoint *pMP = pFrame->mvpMapPoints[i];
+            if (!pMP) continue;
+
+            pMP->Pos2BA();
+            const cv::KeyPoint &kpUn = pFrame->mvKeysUn[i];
+
+            ceres::CostFunction* costfunc = ReprojErrorOnlyPose::Create(kpUn.pt.x, kpUn.pt.y, pMP->_baPos);
+            problem.AddResidualBlock(costfunc, nullptr, pose);
+
+            ordering->AddElementToGroup(pMP->_baPos, 0);
+
+        }
+
+
+        //ceres options
+        ceres::Solver::Options options;
+        options.gradient_tolerance = 1e-16;
+        options.function_tolerance = 1e-16;
+        options.linear_solver_type = ceres::LinearSolverType::SPARSE_SCHUR;
+        options.max_num_iterations = 5;
+        options.minimizer_progress_to_stdout = true;
+        options.num_threads = 1;
+        options.eta = 1e-2;
+        options.max_solver_time_in_seconds = 1e32;
+        options.use_nonmonotonic_steps = false;
+
+        options.linear_solver_ordering.reset(ordering);
+
+        //solve problem
+        ceres::Solver::Summary summary;
+        ceres::Solve(options, &problem, &summary);
+
+        // print out
+        std::cout << summary.FullReport() << "\n";
+
+
+        //check outliers
+
+        for(int i=0; i<pFrame->N; i++) {
+            MapPoint *pMP = pFrame->mvpMapPoints[i];
+            if (!pMP) continue;
 
             const cv::KeyPoint &kpUn = pFrame->mvKeysUn[i];
+
+            ReprojError error(kpUn.pt.x, kpUn.pt.y);
+            double residual[2];
+            error(pose, pMP->_baPos, residual);
+            double chi2 = residual[0] * residual[0] + residual[1] * residual[1];
+            double sig2 = pFrame->mvInvLevelSigma2[kpUn.octave];
+            chi2 /= sig2;
+
+            if (chi2 > 5.991) {
+                pFrame->mvpMapPoints[i] = nullptr;
+            }
         }
+
+
     }
 }
 
@@ -726,109 +899,6 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
     }
 }
 
-    template<typename T> bool compute_residual(const T* const camera,
-               const T* const point, double observed_x, double observed_y,
-               T* residuals) {
-
-        static constexpr double fx = 520.908620;
-        static constexpr double fy = 521.007327;
-        static constexpr double cx = 325.141442;
-        static constexpr double cy = 249.701764;
-
-        // camera[0,1,2] are the angle-axis rotation.
-        T p[3];
-        ceres::AngleAxisRotatePoint(camera, point, p);
-
-        // camera[3,4,5] are the translation.
-        p[0] += camera[3];
-        p[1] += camera[4];
-        p[2] += camera[5];
-
-        const T xp = p[0] / p[2];
-        const T yp = p[1] / p[2];
-
-        const T predicted_x = xp * fx + cx;
-        const T predicted_y = yp * fy + cy;
-
-        // The error is the difference between the predicted and observed position.
-        residuals[0] = predicted_x - observed_x;
-        residuals[1] = predicted_y - observed_y;
-
-        return true;
-    }
-
-
-    struct ReprojError {
-        ReprojError(double observed_x, double observed_y)
-                : observed_x(observed_x), observed_y(observed_y) {}
-
-        template <typename T>
-        bool operator()(const T* const camera,
-                        const T* const point,
-                        T* residuals) const {
-            return compute_residual(camera, point, observed_x,observed_y, residuals);
-        }
-
-        static ceres::CostFunction* Create(double observed_x, double observed_y) {
-            return (new ceres::AutoDiffCostFunction<ReprojError, 2, 6, 3>(
-                    new ReprojError(observed_x, observed_y)));
-        }
-
-        double observed_x;
-        double observed_y;
-    };
-
-
-
-    struct ReprojErrorOnlyPose {
-        ReprojErrorOnlyPose(double observed_x, double observed_y, const double* const pos)
-                : observed_x(observed_x), observed_y(observed_y),_pos(pos) {}
-
-        template <typename T>
-        bool operator()(const T* const camera,
-                        T* residuals) const {
-            T point[3];
-            point[0] = T(_pos[0]);
-            point[1] = T(_pos[0]);
-            point[2] = T(_pos[0]);
-
-            return compute_residual(camera, point, observed_x,observed_y, residuals);
-        }
-
-        static ceres::CostFunction* Create(double observed_x, double observed_y,const double* const pos) {
-            return (new ceres::AutoDiffCostFunction<ReprojErrorOnlyPose, 2, 6>(
-                    new ReprojErrorOnlyPose(observed_x, observed_y, pos)));
-        }
-
-        double observed_x;
-        double observed_y;
-        const double* const _pos;
-    };
-
-    struct ReprojErrorOnlyPoint {
-        ReprojErrorOnlyPoint(double observed_x, double observed_y, const double* const pose)
-                : observed_x(observed_x), observed_y(observed_y) ,_pose(pose){}
-
-        template <typename T>
-        bool operator()(const T* const point,
-                        T* residuals) const {
-            T camera[6];
-            for (int i = 0; i < 6; i++) {
-                camera[i] = T(_pose[i]);
-            }
-
-            return compute_residual(camera, point, observed_x,observed_y, residuals);
-        }
-
-        static ceres::CostFunction* Create(double observed_x, double observed_y,double pose[6]) {
-            return (new ceres::AutoDiffCostFunction<ReprojErrorOnlyPoint, 2, 3>(
-                    new ReprojErrorOnlyPoint(observed_x, observed_y, pose)));
-        }
-
-        double observed_x;
-        double observed_y;
-        const double* const _pose;
-    };
 
     void Optimizer::LocalBA(set<MapPoint*>& lLocalMapPoints, set<KeyFrame*>& optimizeKeyFrames, set<MapPoint*>& optimizePoints)
     {

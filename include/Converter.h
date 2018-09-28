@@ -50,6 +50,9 @@ public:
     static Eigen::Matrix<double,3,3> toMatrix3d(const cv::Mat &cvMat3);
 
     static std::vector<float> toQuaternion(const cv::Mat &M);
+
+    static void toT6(const cv::Mat& SE3, double* t6);
+    static void toSE3(const double* const t6, cv::Mat& SE3);
 };
 
 }// namespace ORB_SLAM

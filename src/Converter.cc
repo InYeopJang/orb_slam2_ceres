@@ -20,6 +20,7 @@
 
 
 #include "Converter.h"
+#include <opencv2/opencv.hpp>
 
 namespace ORB_SLAM2
 {
@@ -146,6 +147,41 @@ std::vector<float> Converter::toQuaternion(const cv::Mat &M)
     v[3] = q.w();
 
     return v;
+}
+
+
+void Converter::toT6(const cv::Mat& SE3, double* t6) {
+
+    cv::Mat R = SE3.rowRange(0,3).colRange(0,3);
+    cv::Mat_<float> t = SE3.rowRange(0,3).col(3);
+
+    cv::Vec3f rod;
+
+    cv::Rodrigues(R, rod);
+    t6[0] = rod(0);
+    t6[1] = rod(1);
+    t6[2] = rod(2);
+
+    //translation
+    t6[3] = t(0);
+    t6[4] = t(1);
+    t6[5] = t(2);
+}
+void Converter::toSE3(const double* const t6, cv::Mat& SE3) {
+
+    cv::Vec3f rod(t6[0],t6[1],t6[2]);
+    cv::Mat R;
+    cv::Rodrigues(rod, R);
+
+    cv::Mat_<float> T = cv::Mat_<float>::eye(4,4);
+
+    R.copyTo(T.rowRange(0,3).colRange(0,3));
+
+    T(0,3) = t6[3];
+    T(1,3) = t6[4];
+    T(2,3) = t6[5];
+
+    SE3 = T;
 }
 
 } //namespace ORB_SLAM

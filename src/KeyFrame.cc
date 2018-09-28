@@ -92,20 +92,9 @@ cv::Mat KeyFrame::GetPose()
 
     bool KeyFrame::Pose2BA()
     {
-        cv::Mat R = GetRotation();
-        cv::Mat_<float> t = GetTranslation();
+        cv::Mat pose = GetPose();
 
-        cv::Vec3f rod;
-
-        cv::Rodrigues(R, rod);
-        _baPose[0] = rod(0);
-        _baPose[1] = rod(1);
-        _baPose[2] = rod(2);
-
-        //translation
-        _baPose[3] = t(0);
-        _baPose[4] = t(1);
-        _baPose[5] = t(2);
+        Converter::toT6(pose, _baPose);
 
         return true;
 
@@ -113,19 +102,10 @@ cv::Mat KeyFrame::GetPose()
 
     bool KeyFrame::BA2Pose()
     {
-        cv::Vec3f rod(_baPose[0],_baPose[1],_baPose[2]);
-        cv::Mat R;
-        cv::Rodrigues(rod, R);
+        cv::Mat pose;
+        Converter::toSE3(_baPose, pose);
 
-        cv::Mat_<float> T = cv::Mat_<float>::eye(4,4);
-
-        R.copyTo(T.rowRange(0,3).colRange(0,3));
-
-        T(0,3) = _baPose[3];
-        T(1,3) = _baPose[4];
-        T(2,3) = _baPose[5];
-
-        this->SetPose(T);
+        this->SetPose(pose);
 
         return true;
     }
