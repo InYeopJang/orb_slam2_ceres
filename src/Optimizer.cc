@@ -710,11 +710,37 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
     }
 }
 
+    template<typename T> bool compute_residual(const T* const camera,
+               const T* const point, double observed_x, double observed_y,
+               T* residuals) {
 
-    static const double fx = 520.908620;
-    static const double fy = 521.007327;
-    static const double cx = 325.141442;
-    static const double cy = 249.701764;
+        static constexpr double fx = 520.908620;
+        static constexpr double fy = 521.007327;
+        static constexpr double cx = 325.141442;
+        static constexpr double cy = 249.701764;
+
+        // camera[0,1,2] are the angle-axis rotation.
+        T p[3];
+        ceres::AngleAxisRotatePoint(camera, point, p);
+
+        // camera[3,4,5] are the translation.
+        p[0] += camera[3];
+        p[1] += camera[4];
+        p[2] += camera[5];
+
+        const T xp = p[0] / p[2];
+        const T yp = p[1] / p[2];
+
+        const T predicted_x = xp * fx + cx;
+        const T predicted_y = yp * fy + cy;
+
+        // The error is the difference between the predicted and observed position.
+        residuals[0] = predicted_x - observed_x;
+        residuals[1] = predicted_y - observed_y;
+
+        return true;
+    }
+
 
     struct ReprojError {
         ReprojError(double observed_x, double observed_y)
@@ -724,119 +750,79 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
         bool operator()(const T* const camera,
                         const T* const point,
                         T* residuals) const {
-            // camera[0,1,2] are the angle-axis rotation.
-            T p[3];
-            ceres::AngleAxisRotatePoint(camera, point, p);
-
-            // camera[3,4,5] are the translation.
-            p[0] += camera[3];
-            p[1] += camera[4];
-            p[2] += camera[5];
-
-            const T xp = p[0] / p[2];
-            const T yp = p[1] / p[2];
-
-            const T predicted_x = xp * fx + cx;
-            const T predicted_y = yp * fy + cy;
-
-            // The error is the difference between the predicted and observed position.
-            residuals[0] = predicted_x - observed_x;
-            residuals[1] = predicted_y - observed_y;
-
-            //TODO debug 检查是否差别大
-//            std::cout << "-------------------------------------------------------------------------" << std::endl;
-//            for (int i = 0; i < 6; ++i) {
-//                std::cout << camera[i] << " , ";
-//            }
-//            std::cout << std::endl;
-//
-//            for (int i = 0; i < 3; ++i) {
-//                std::cout << point[i] << " , ";
-//            }
-//            std::cout << std::endl;
-//
-//            std::cout << "observed: " << observed_x << " predict: " << predicted_x << std::endl;
-//            std::cout << "observed: " << observed_y << " predict: " << predicted_y << std::endl;
-
-            return true;
+            return compute_residual(camera, point, observed_x,observed_y, residuals);
         }
 
-        // Factory to hide the construction of the CostFunction object from
-        // the client code.
-        static ceres::CostFunction* Create(const double observed_x,
-                                           const double observed_y) {
+        static ceres::CostFunction* Create(double observed_x, double observed_y) {
             return (new ceres::AutoDiffCostFunction<ReprojError, 2, 6, 3>(
                     new ReprojError(observed_x, observed_y)));
         }
 
         double observed_x;
         double observed_y;
-
     };
 
 
 
-    void Optimizer::LocalBundleAdjustmentCeres(KeyFrame *pKF, bool* pbStopFlag, Map* pMap)
+    struct ReprojErrorOnlyPose {
+        ReprojErrorOnlyPose(double observed_x, double observed_y, const double* const pos)
+                : observed_x(observed_x), observed_y(observed_y),_pos(pos) {}
+
+        template <typename T>
+        bool operator()(const T* const camera,
+                        T* residuals) const {
+            T point[3];
+            point[0] = T(_pos[0]);
+            point[1] = T(_pos[0]);
+            point[2] = T(_pos[0]);
+
+            return compute_residual(camera, point, observed_x,observed_y, residuals);
+        }
+
+        static ceres::CostFunction* Create(double observed_x, double observed_y,const double* const pos) {
+            return (new ceres::AutoDiffCostFunction<ReprojErrorOnlyPose, 2, 6>(
+                    new ReprojErrorOnlyPose(observed_x, observed_y, pos)));
+        }
+
+        double observed_x;
+        double observed_y;
+        const double* const _pos;
+    };
+
+    struct ReprojErrorOnlyPoint {
+        ReprojErrorOnlyPoint(double observed_x, double observed_y, const double* const pose)
+                : observed_x(observed_x), observed_y(observed_y) ,_pose(pose){}
+
+        template <typename T>
+        bool operator()(const T* const point,
+                        T* residuals) const {
+            T camera[6];
+            for (int i = 0; i < 6; i++) {
+                camera[i] = T(_pose[i]);
+            }
+
+            return compute_residual(camera, point, observed_x,observed_y, residuals);
+        }
+
+        static ceres::CostFunction* Create(double observed_x, double observed_y,double pose[6]) {
+            return (new ceres::AutoDiffCostFunction<ReprojErrorOnlyPoint, 2, 3>(
+                    new ReprojErrorOnlyPoint(observed_x, observed_y, pose)));
+        }
+
+        double observed_x;
+        double observed_y;
+        const double* const _pose;
+    };
+
+    void Optimizer::LocalBA(set<MapPoint*>& lLocalMapPoints, set<KeyFrame*>& fixedKeyFrames, set<MapPoint*>& fixedPoints)
     {
-        // Local KeyFrames: First Breath Search from Current Keyframe
-        list<KeyFrame*> lLocalKeyFrames;
-
-        lLocalKeyFrames.push_back(pKF);
-        pKF->mnBALocalForKF = pKF->mnId;
-
-        const vector<KeyFrame*> vNeighKFs = pKF->GetVectorCovisibleKeyFrames();
-        for(int i=0, iend=vNeighKFs.size(); i<iend; i++)
-        {
-            KeyFrame* pKFi = vNeighKFs[i];
-            pKFi->mnBALocalForKF = pKF->mnId;
-            if(!pKFi->isBad())
-                lLocalKeyFrames.push_back(pKFi);
-        }
-
-
-        // Local MapPoints seen in Local KeyFrames
-        list<MapPoint*> lLocalMapPoints;
-        for(list<KeyFrame*>::iterator lit=lLocalKeyFrames.begin() , lend=lLocalKeyFrames.end(); lit!=lend; lit++)
-        {
-            vector<MapPoint*> vpMPs = (*lit)->GetMapPointMatches();
-            for(vector<MapPoint*>::iterator vit=vpMPs.begin(), vend=vpMPs.end(); vit!=vend; vit++)
-            {
-                MapPoint* pMP = *vit;
-                if(pMP)
-                    if(!pMP->isBad())
-                        if(pMP->mnBALocalForKF!=pKF->mnId)
-                        {
-                            lLocalMapPoints.push_back(pMP);
-                            pMP->mnBALocalForKF=pKF->mnId;
-                        }
-            }
-        }
-
-
-        // Fixed Keyframes. Keyframes that see Local MapPoints but that are not Local Keyframes
-        list<KeyFrame*> lFixedCameras;
-        for(list<MapPoint*>::iterator lit=lLocalMapPoints.begin(), lend=lLocalMapPoints.end(); lit!=lend; lit++)
-        {
-            map<KeyFrame*,size_t> observations = (*lit)->GetObservations();
-            for(map<KeyFrame*,size_t>::iterator mit=observations.begin(), mend=observations.end(); mit!=mend; mit++)
-            {
-                KeyFrame* pKFi = mit->first;
-
-                if(pKFi->mnBALocalForKF!=pKF->mnId && pKFi->mnBAFixedForKF!=pKF->mnId)
-                {
-                    pKFi->mnBAFixedForKF=pKF->mnId;
-                    if(!pKFi->isBad())
-                        lFixedCameras.push_back(pKFi);
-                }
-            }
-        }
 
         //==============================================================================================================
 
         ceres::Problem problem;
 
         //build problem
-        for (list<MapPoint*>::iterator pit = lLocalMapPoints.begin(); pit != lLocalMapPoints.end(); ++pit)
+        for (set<MapPoint*>::iterator pit = lLocalMapPoints.begin(); pit != lLocalMapPoints.end(); ++pit)
         {
             MapPoint* mp = *pit;
 
@@ -851,69 +837,44 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
 
                 const cv::KeyPoint &kpUn = pKF->mvKeysUn[idx];
 
-                ceres::CostFunction* costfunc = ReprojError::Create(kpUn.pt.x, kpUn.pt.y);
-                ceres::LossFunction* lossfunc = new ceres::HuberLoss(0.5);
-
                 pKF->Pose2BA();
                 mp->Pos2BA();
 
+                ceres::LossFunction* lossfunc = new ceres::HuberLoss(0.5);
 
+                if (fixedKeyFrames.find(pKF) != fixedKeyFrames.end()) {
+                    ceres::CostFunction* costfunc = ReprojErrorOnlyPoint::Create(kpUn.pt.x, kpUn.pt.y, pKF->_baPose);
+                    problem.AddResidualBlock(costfunc, lossfunc, mp->_baPos);
 
-                //test
-//                cv::Mat K = pKF->mK;
-//                cv::Mat R = pKF->GetRotation();
-//                cv::Mat t = pKF->GetTranslation();
-//                cv::Mat p = mp->GetWorldPos();
+                } else if (fixedPoints.find(mp) != fixedPoints.end()){
+                    ceres::CostFunction* costfunc = ReprojErrorOnlyPose::Create(kpUn.pt.x, kpUn.pt.y, mp->_baPos);
+                    problem.AddResidualBlock(costfunc, lossfunc, pKF->_baPose);
+                }
+                else {
+                    ceres::CostFunction* costfunc = ReprojError::Create(kpUn.pt.x, kpUn.pt.y);
+                    problem.AddResidualBlock(costfunc, lossfunc, pKF->_baPose, mp->_baPos);
+                }
 
-                /*
-                std::cout << "==============================================" <<std::endl;
-                std::cout << R << std::endl << t << std::endl << p << std::endl;
-
-                std::cout << "----------------------------------------------" << std::endl;
-
-                pKF->BA2Pose();
-                mp->BA2Pos();
-
-                R = pKF->GetRotation();
-                t = pKF->GetTranslation();
-                p = mp->GetWorldPos();
-
-                std::cout << R << std::endl << t << std::endl << p << std::endl;
-
-                std::cout << "==============================================" <<std::endl;
-
-                 */
-//
-//                std::cout << "+++++++++++++++++++" << std::endl;
-//
-//                cv::Mat x = R * p + t;
-//                x.at<float>(0,0) /= x.at<float>(0,2);
-//                x.at<float>(0,1) /= x.at<float>(0,2);
-//                x.at<float>(0,2) = 1.0;
-//
-//                cv::Mat uv =  K * x;
-//                std::cout << " pose: " << pKF->GetPose() << std::endl;
-//                std::cout << " positoin: " << p << std::endl;
-//                std::cout << uv << " ===? " << kpUn.pt << " ===distor==" << pKF->mvKeys[idx].pt << std::endl;
-
-                problem.AddResidualBlock(costfunc, lossfunc, pKF->_baPose, mp->_baPos);
             }
         }
 
-        ceres::ParameterBlockOrdering* ordering =
-                new ceres::ParameterBlockOrdering;
+        ceres::ParameterBlockOrdering* ordering = new ceres::ParameterBlockOrdering;
 
-        for (list<MapPoint*>::iterator pit = lLocalMapPoints.begin(); pit != lLocalMapPoints.end(); ++pit) {
+        for (set<MapPoint*>::iterator pit = lLocalMapPoints.begin(); pit != lLocalMapPoints.end(); ++pit) {
             MapPoint *mp = *pit;
 
             const map<KeyFrame *, size_t> observations = mp->GetObservations();
 
             for (map<KeyFrame *, size_t>::const_iterator ob = observations.begin(); ob != observations.end(); ++ob) {
                 KeyFrame *pKF = ob->first;
-                if (pKF->isBad()) continue;
 
-                ordering->AddElementToGroup(mp->_baPos, 0);
-                ordering->AddElementToGroup(pKF->_baPose, 1);
+                if (fixedKeyFrames.find(pKF) == fixedKeyFrames.end()) {
+                    ordering->AddElementToGroup(pKF->_baPose, 1);
+                }
+
+                if (fixedPoints.find(mp) == fixedPoints.end()){
+                    ordering->AddElementToGroup(mp->_baPos, 0);
+                }
             }
         }
 
@@ -936,24 +897,116 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
         ceres::Solver::Summary summary;
         ceres::Solve(options, &problem, &summary);
 
+        // print out
+        std::cout << summary.FullReport() << "\n";
+
+    }
+
+    void Optimizer::findOutliers(set<MapPoint*>& lLocalMapPoints, list<pair<KeyFrame *, MapPoint *> >& toErase) {
+        // check outliers
+        for (set<MapPoint *>::iterator pit = lLocalMapPoints.begin(); pit != lLocalMapPoints.end(); ++pit) {
+            MapPoint *mp = *pit;
+
+            const map<KeyFrame *, size_t> observations = mp->GetObservations();
+
+            for (map<KeyFrame *, size_t>::const_iterator ob = observations.begin(); ob != observations.end(); ++ob) {
+                KeyFrame *pKF = ob->first;
+
+                const cv::KeyPoint &kpUn = pKF->mvKeysUn[ob->second];
+                ReprojError error(kpUn.pt.x, kpUn.pt.y);
+                double residual[2];
+                error(pKF->_baPose, mp->_baPos, residual);
+                double chi2 = residual[0] * residual[0] + residual[1] * residual[1];
+                double sig2 = pKF->mvInvLevelSigma2[kpUn.octave];
+                chi2 /= sig2;
+
+                if (chi2 > 5.991) {
+                    toErase.push_back(make_pair(pKF, mp));
+                }
+            }
+        }
+    }
+
+
+
+    void Optimizer::LocalBundleAdjustmentCeres(KeyFrame *pKF, bool* pbStopFlag, Map* pMap)
+    {
+        // Local KeyFrames: First Breath Search from Current Keyframe
+        set<KeyFrame*> lLocalKeyFrames;
+
+        lLocalKeyFrames.insert(pKF);
+
+        const vector<KeyFrame*> vNeighKFs = pKF->GetVectorCovisibleKeyFrames();
+        for(int i=0, iend=vNeighKFs.size(); i<iend; i++)
+        {
+            KeyFrame* pKFi = vNeighKFs[i];
+            if(!pKFi->isBad())
+                lLocalKeyFrames.insert(pKFi);
+        }
+
+        // Local MapPoints seen in Local KeyFrames
+        set<MapPoint*> lLocalMapPoints;
+        for(set<KeyFrame*>::iterator lit=lLocalKeyFrames.begin() , lend=lLocalKeyFrames.end(); lit!=lend; lit++)
+        {
+            vector<MapPoint*> vpMPs = (*lit)->GetMapPointMatches();
+            for(vector<MapPoint*>::iterator vit=vpMPs.begin(), vend=vpMPs.end(); vit!=vend; vit++)
+            {
+                MapPoint* pMP = *vit;
+                if(pMP)
+                    if(!pMP->isBad())
+                        lLocalMapPoints.insert(pMP);
+            }
+        }
+
+
+        // Fixed Keyframes. Keyframes that see Local MapPoints but that are not Local Keyframes
+        set<KeyFrame*> lFixedCameras;
+        for(set<MapPoint*>::iterator lit=lLocalMapPoints.begin(), lend=lLocalMapPoints.end(); lit!=lend; lit++)
+        {
+            map<KeyFrame*,size_t> observations = (*lit)->GetObservations();
+            for(map<KeyFrame*,size_t>::iterator mit=observations.begin(), mend=observations.end(); mit!=mend; mit++)
+            {
+                KeyFrame* pKFi = mit->first;
+
+                if(lLocalKeyFrames.find(pKFi) == lLocalKeyFrames.end())
+                    lFixedCameras.insert(pKFi);
+            }
+        }
+
+
+        set<MapPoint*> fixedPoints;
+
+        for (int i = 0; i < 4; i++) {
+
+            LocalBA(lLocalMapPoints, lFixedCameras, fixedPoints);
+
+            list<pair<KeyFrame *, MapPoint *> > outliers;
+            findOutliers(lLocalMapPoints, outliers);
+
+            for (list<pair<KeyFrame *, MapPoint *> >::iterator it = outliers.begin(); it != outliers.end(); it++)
+            {
+                KeyFrame* pKFi = it->first;
+                MapPoint* pMPi = it->second;
+                pKFi->EraseMapPointMatch(pMPi);
+                pMPi->EraseObservation(pKFi);
+            }
+
+        }
 
         //recover Keyframes
-        for(list<KeyFrame*>::iterator lit=lLocalKeyFrames.begin(), lend=lLocalKeyFrames.end(); lit!=lend; lit++)
+        for(set<KeyFrame*>::iterator lit=lLocalKeyFrames.begin(), lend=lLocalKeyFrames.end(); lit!=lend; lit++)
         {
             KeyFrame* pKF = *lit;
             pKF->BA2Pose();
         }
 
         // recover Points
-        for(list<MapPoint*>::iterator lit=lLocalMapPoints.begin(), lend=lLocalMapPoints.end(); lit!=lend; lit++)
+        for(set<MapPoint*>::iterator lit=lLocalMapPoints.begin(), lend=lLocalMapPoints.end(); lit!=lend; lit++)
         {
             MapPoint* pMP = *lit;
             pMP->BA2Pos();
             pMP->UpdateNormalAndDepth();
         }
-
-        // print out
-        std::cout << summary.FullReport() << "\n";
 
     }
 

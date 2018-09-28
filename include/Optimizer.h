@@ -44,6 +44,10 @@ public:
 //                                       const unsigned long nLoopKF=0, const bool bRobust = true);
     void static LocalBundleAdjustment(KeyFrame* pKF, bool *pbStopFlag, Map *pMap);
 
+    void static LocalBA(set<MapPoint*>& lLocalMapPoints, set<KeyFrame*>& fixedKeyFrames, set<MapPoint*>& fixedPoints);
+
+    void static findOutliers(set<MapPoint*>& lLocalMapPoints, list<pair<KeyFrame *, MapPoint *> >& toErase);
+
     // ceres version
     void static LocalBundleAdjustmentCeres(KeyFrame* pKF, bool *pbStopFlag, Map *pMap);
 
