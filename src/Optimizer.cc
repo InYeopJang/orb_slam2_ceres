@@ -383,6 +383,22 @@ int Optimizer::PoseOptimization(Frame *pFrame)
     return nInitialCorrespondences-nBad;
 }
 
+int Optimizer::PoseOptimizationCeres(Frame *pFrame) {
+
+    unique_lock<mutex> lock(MapPoint::mGlobalMutex);
+
+    int nInitialCorrespondences = 0;
+
+    for(int i=0; i<pFrame->N; i++) {
+        MapPoint *pMP = pFrame->mvpMapPoints[i];
+        if (pMP) {
+            nInitialCorrespondences++;
+
+            const cv::KeyPoint &kpUn = pFrame->mvKeysUn[i];
+        }
+    }
+}
+
 void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap)
 {
     // Local KeyFrames: First Breath Search from Current Keyframe
@@ -814,7 +830,7 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
         const double* const _pose;
     };
 
-    void Optimizer::LocalBA(set<MapPoint*>& lLocalMapPoints, set<KeyFrame*>& fixedKeyFrames, set<MapPoint*>& fixedPoints)
+    void Optimizer::LocalBA(set<MapPoint*>& lLocalMapPoints, set<KeyFrame*>& optimizeKeyFrames, set<MapPoint*>& optimizePoints)
     {
 
         //==============================================================================================================
@@ -842,11 +858,11 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
 
                 ceres::LossFunction* lossfunc = new ceres::HuberLoss(0.5);
 
-                if (fixedKeyFrames.find(pKF) != fixedKeyFrames.end()) {
+                if (optimizeKeyFrames.find(pKF) == optimizeKeyFrames.end()) {
                     ceres::CostFunction* costfunc = ReprojErrorOnlyPoint::Create(kpUn.pt.x, kpUn.pt.y, pKF->_baPose);
                     problem.AddResidualBlock(costfunc, lossfunc, mp->_baPos);
 
-                } else if (fixedPoints.find(mp) != fixedPoints.end()){
+                } else if (optimizePoints.find(mp) == optimizePoints.end()){
                     ceres::CostFunction* costfunc = ReprojErrorOnlyPose::Create(kpUn.pt.x, kpUn.pt.y, mp->_baPos);
                     problem.AddResidualBlock(costfunc, lossfunc, pKF->_baPose);
                 }
@@ -868,11 +884,11 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
             for (map<KeyFrame *, size_t>::const_iterator ob = observations.begin(); ob != observations.end(); ++ob) {
                 KeyFrame *pKF = ob->first;
 
-                if (fixedKeyFrames.find(pKF) == fixedKeyFrames.end()) {
+                if (optimizeKeyFrames.find(pKF) != optimizeKeyFrames.end()) {
                     ordering->AddElementToGroup(pKF->_baPose, 1);
                 }
 
-                if (fixedPoints.find(mp) == fixedPoints.end()){
+                if (optimizePoints.find(mp) != optimizePoints.end()){
                     ordering->AddElementToGroup(mp->_baPos, 0);
                 }
             }
@@ -937,11 +953,14 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
         lLocalKeyFrames.insert(pKF);
 
         const vector<KeyFrame*> vNeighKFs = pKF->GetVectorCovisibleKeyFrames();
+        KeyFrame* firstKeyFrame;
         for(int i=0, iend=vNeighKFs.size(); i<iend; i++)
         {
             KeyFrame* pKFi = vNeighKFs[i];
             if(!pKFi->isBad())
                 lLocalKeyFrames.insert(pKFi);
+            if (pKFi->mnId == 0)
+                firstKeyFrame = pKFi;
         }
 
         // Local MapPoints seen in Local KeyFrames
@@ -958,27 +977,13 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
             }
         }
 
-
-        // Fixed Keyframes. Keyframes that see Local MapPoints but that are not Local Keyframes
-        set<KeyFrame*> lFixedCameras;
-        for(set<MapPoint*>::iterator lit=lLocalMapPoints.begin(), lend=lLocalMapPoints.end(); lit!=lend; lit++)
-        {
-            map<KeyFrame*,size_t> observations = (*lit)->GetObservations();
-            for(map<KeyFrame*,size_t>::iterator mit=observations.begin(), mend=observations.end(); mit!=mend; mit++)
-            {
-                KeyFrame* pKFi = mit->first;
-
-                if((pKFi->mnId == 0) || (lLocalKeyFrames.find(pKFi) == lLocalKeyFrames.end()))
-                    lFixedCameras.insert(pKFi);
-            }
-        }
-
-
-        set<MapPoint*> fixedPoints;
+        set<MapPoint*> optimizePoints = lLocalMapPoints;
+        set<KeyFrame*> optimizeKeyFrames = lLocalKeyFrames;
+        optimizeKeyFrames.erase(firstKeyFrame);
 
         for (int i = 0; i < 4; i++) {
 
-            LocalBA(lLocalMapPoints, lFixedCameras, fixedPoints);
+            LocalBA(lLocalMapPoints, optimizeKeyFrames, optimizePoints);
 
             list<pair<KeyFrame *, MapPoint *> > outliers;
             findOutliers(lLocalMapPoints, outliers);

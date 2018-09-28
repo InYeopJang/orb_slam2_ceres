@@ -44,7 +44,7 @@ public:
 //                                       const unsigned long nLoopKF=0, const bool bRobust = true);
     void static LocalBundleAdjustment(KeyFrame* pKF, bool *pbStopFlag, Map *pMap);
 
-    void static LocalBA(set<MapPoint*>& lLocalMapPoints, set<KeyFrame*>& fixedKeyFrames, set<MapPoint*>& fixedPoints);
+    void static LocalBA(set<MapPoint*>& lLocalMapPoints, set<KeyFrame*>& optimizeKeyFrames, set<MapPoint*>& optimizePoints);
 
     void static findOutliers(set<MapPoint*>& lLocalMapPoints, list<pair<KeyFrame *, MapPoint *> >& toErase);
 
@@ -52,6 +52,7 @@ public:
     void static LocalBundleAdjustmentCeres(KeyFrame* pKF, bool *pbStopFlag, Map *pMap);
 
     int static PoseOptimization(Frame* pFrame);
+    int static PoseOptimizationCeres(Frame* pFrame);
 //
 //    // if bFixScale is true, 6DoF optimization (stereo,rgbd), 7DoF otherwise (mono)
 //    void static OptimizeEssentialGraph(Map* pMap, KeyFrame* pLoopKF, KeyFrame* pCurKF,
