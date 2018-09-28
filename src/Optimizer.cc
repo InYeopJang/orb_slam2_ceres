@@ -968,7 +968,7 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
             {
                 KeyFrame* pKFi = mit->first;
 
-                if(lLocalKeyFrames.find(pKFi) == lLocalKeyFrames.end())
+                if((pKFi->mnId == 0) || (lLocalKeyFrames.find(pKFi) == lLocalKeyFrames.end()))
                     lFixedCameras.insert(pKFi);
             }
         }
