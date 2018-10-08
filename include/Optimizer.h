@@ -52,7 +52,7 @@ public:
     void static LocalBundleAdjustmentCeres(KeyFrame* pKF, bool *pbStopFlag, Map *pMap);
 
     int static PoseOptimization(Frame* pFrame);
-    int static PoseOptimizationCeres(Frame* pFrame);
+    //int static PoseOptimizationCeres(Frame* pFrame);
 //
 //    // if bFixScale is true, 6DoF optimization (stereo,rgbd), 7DoF otherwise (mono)
 //    void static OptimizeEssentialGraph(Map* pMap, KeyFrame* pLoopKF, KeyFrame* pCurKF,
