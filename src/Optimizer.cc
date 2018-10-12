@@ -44,10 +44,10 @@ namespace ORB_SLAM2
                                                const T* const point, double observed_x, double observed_y,
                                                T* residuals) {
 
-        static constexpr double fx = 517.306408;
-        static constexpr double fy = 516.469215;
-        static constexpr double cx = 318.643040;
-        static constexpr double cy = 255.313989;
+        static constexpr double fx = 520.908620;
+        static constexpr double fy = 521.007327;
+        static constexpr double cx = 325.141442;
+        static constexpr double cy = 249.701764;
 
         // camera[0,1,2] are the angle-axis rotation.
         T p[3];
@@ -1591,6 +1591,11 @@ int Optimizer::OptimizeSim3(KeyFrame *pKF1, KeyFrame *pKF2, vector<MapPoint *> &
 
     return nIn;
 }
+
+    int Optimizer::OptimizeSim3_2(KeyFrame *pKF1, KeyFrame *pKF2, vector<MapPoint *> &vpMatches1, g2o::Sim3 &g2oS12, const float th2, const bool bFixScale)
+    {
+
+    }
 
 
 } //namespace ORB_SLAM
