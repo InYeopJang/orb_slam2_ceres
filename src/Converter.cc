@@ -184,4 +184,22 @@ void Converter::toSE3(const double* const t6, cv::Mat& SE3) {
     SE3 = T;
 }
 
+void Converter::toG2OSim3(const double* const t6, g2o::Sim3 &gSim3)
+{
+
+    cv::Vec3d rod(t6[0],t6[1],t6[2]);
+    cv::Mat_<double> cvR;
+    cv::Rodrigues(rod, cvR);
+
+    Eigen::Matrix<double,3,3> R;
+    R <<    cvR(0,0), cvR(0,1), cvR(0,2),
+            cvR(1,0), cvR(1,1), cvR(1,2),
+            cvR(2,0), cvR(2,1), cvR(2,2);
+
+    Eigen::Vector3d t(t6[0], t6[1], t6[2]);
+
+    gSim3 = g2o::Sim3(R, t, 1.0);
+
+}
+
 } //namespace ORB_SLAM

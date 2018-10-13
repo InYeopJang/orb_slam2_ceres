@@ -40,14 +40,15 @@ namespace ORB_SLAM2
 {
 
 
+    static constexpr double fx = 520.908620;
+    static constexpr double fy = 521.007327;
+    static constexpr double cx = 325.141442;
+    static constexpr double cy = 249.701764;
+
+
     template<typename T> bool compute_residual(const T* const camera,
                                                const T* const point, double observed_x, double observed_y,
                                                T* residuals) {
-
-        static constexpr double fx = 520.908620;
-        static constexpr double fy = 521.007327;
-        static constexpr double cx = 325.141442;
-        static constexpr double cy = 249.701764;
 
         // camera[0,1,2] are the angle-axis rotation.
         T p[3];
@@ -64,30 +65,44 @@ namespace ORB_SLAM2
         const T predicted_x = xp * fx + cx;
         const T predicted_y = yp * fy + cy;
 
-        // The error is the difference between the predicted and observed position.
         residuals[0] = predicted_x - observed_x;
         residuals[1] = predicted_y - observed_y;
-//
-//        std::cout << "camera: " << std::endl;
-//        for (int i = 0; i < 6; i++) {
-//            std::cout << camera[i] << ",";
-//        }
-//        std::cout << "point: " << std::endl;
-//        for (int i = 0; i < 3; i++) {
-//            std::cout << point[i] << ",";
-//        }
-//
-//        std::cout << "after rotate point: " << std::endl;
-//        for (int i = 0; i < 3; i++) {
-//            std::cout << p[i] << ",";
-//        }
-//
-//        std::cout << std::endl;
-//
-//        std::cout << "observed: " << observed_x << "," << observed_y << "  estimated: " << predicted_x << "," << predicted_y << std::endl;
 
         return true;
     }
+
+    //inverse camera
+    template<typename T> bool compute_residual2(const T* const camera,
+                                               const T* const point, double observed_x, double observed_y,
+                                               T* residuals) {
+
+        // camera[0,1,2] are the angle-axis rotation.
+        T p[3], R[3],t[3];
+
+        for (int i = 0; i < 3; i++) {
+            R[i] = -camera[i];
+        }
+
+        ceres::AngleAxisRotatePoint(R, camera+3, t);
+
+        ceres::AngleAxisRotatePoint(R, point, p);
+
+        for (int i = 0; i < 3; i++) {
+            p[i] -= t[i];
+        }
+
+        const T xp = p[0] / p[2];
+        const T yp = p[1] / p[2];
+
+        const T predicted_x = xp * fx + cx;
+        const T predicted_y = yp * fy + cy;
+
+        residuals[0] = predicted_x - observed_x;
+        residuals[1] = predicted_y - observed_y;
+
+        return true;
+    }
+
 
 
     struct ReprojError {
@@ -130,6 +145,31 @@ namespace ORB_SLAM2
         static ceres::CostFunction* Create(double observed_x, double observed_y,const double* const pos) {
             return (new ceres::AutoDiffCostFunction<ReprojErrorOnlyPose, 2, 6>(
                     new ReprojErrorOnlyPose(observed_x, observed_y, pos)));
+        }
+
+        double observed_x;
+        double observed_y;
+        const double* const _pos;
+    };
+
+    struct ReprojErrorInvSim3 {
+        ReprojErrorInvSim3(double observed_x, double observed_y, const double* const pos)
+                : observed_x(observed_x), observed_y(observed_y),_pos(pos) {}
+
+        template <typename T>
+        bool operator()(const T* const camera,
+                        T* residuals) const {
+            T point[3];
+            point[0] = T(_pos[0]);
+            point[1] = T(_pos[1]);
+            point[2] = T(_pos[2]);
+
+            return compute_residual(camera, point, observed_x,observed_y, residuals);
+        }
+
+        static ceres::CostFunction* Create(double observed_x, double observed_y,const double* const pos) {
+            return (new ceres::AutoDiffCostFunction<ReprojErrorInvSim3, 2, 6>(
+                    new ReprojErrorInvSim3(observed_x, observed_y, pos)));
         }
 
         double observed_x;
@@ -1594,6 +1634,117 @@ int Optimizer::OptimizeSim3(KeyFrame *pKF1, KeyFrame *pKF2, vector<MapPoint *> &
 
     int Optimizer::OptimizeSim3_2(KeyFrame *pKF1, KeyFrame *pKF2, vector<MapPoint *> &vpMatches1, g2o::Sim3 &g2oS12, const float th2, const bool bFixScale)
     {
+
+        //compute [sR,t] s=1 for rgbd is equal SE3
+        cv::Mat sim3 = Converter::toCvMat(g2oS12);
+        double se3[6];
+        Converter::toT6(sim3, se3);
+
+        const vector<MapPoint*> vpMapPoints1 = pKF1->GetMapPointMatches();
+        int N = vpMatches1.size();
+
+
+        vector<bool> outliers;
+        outliers.resize(N, false);
+
+        int good = 0;
+        for (int epoch = 0; epoch < 2; epoch++) {
+
+            ceres::Problem problem;
+
+            for (int i = 0; i < N; i++) {
+
+                MapPoint *pMP1 = vpMapPoints1[i];
+                MapPoint *pMP2 = vpMatches1[i];
+                int i2 = pMP2->GetIndexInKeyFrame(pKF2);
+
+                if (!pMP1 || !pMP2) continue;
+                if (pMP1->isBad() || pMP2->isBad()) continue;
+                if (i2 < 0) continue;
+
+                if (outliers[i]) continue;
+
+                cv::Mat x1 = pKF1->GetPose() * pMP1->GetWorldPos();
+                cv::Mat x2 = pKF2->GetPose() * pMP2->GetWorldPos();
+
+                const cv::KeyPoint &kpUn = pKF1->mvKeysUn[i];
+                const cv::KeyPoint &kpUn2 = pKF2->mvKeysUn[i2];
+
+                double X1[3], X2[3];
+                for (int k = 0; k < 3; k++) {
+                    X1[k] = x1.at<float>(k);
+                    X2[k] = x2.at<float>(k);
+                }
+
+                // X1 = se3 * X2
+                ceres::LossFunction *lossfunc = new ceres::HuberLoss(0.5);
+                ceres::CostFunction *costfunc = ReprojErrorOnlyPose::Create(kpUn.pt.x, kpUn.pt.y, X2);
+                problem.AddResidualBlock(costfunc, lossfunc, se3);
+
+
+                // X2 = 1/se3 * X1
+                ceres::LossFunction *lossfunc2 = new ceres::HuberLoss(0.5);
+                ceres::CostFunction *costfunc2 = ReprojErrorInvSim3::Create(kpUn2.pt.x, kpUn2.pt.y, X1);
+                problem.AddResidualBlock(costfunc2, lossfunc2, se3);
+
+            }
+
+            //solve problem
+            ceres::Solver::Options options = defaultOpt();
+            ceres::Solver::Summary summary;
+            ceres::Solve(options, &problem, &summary);
+
+            //check outliers
+            good = 0;
+            for (int i = 0; i < N; i++) {
+
+                MapPoint *pMP1 = vpMapPoints1[i];
+                MapPoint *pMP2 = vpMatches1[i];
+                int i2 = pMP2->GetIndexInKeyFrame(pKF2);
+
+                if (!pMP1 || !pMP2) continue;
+                if (pMP1->isBad() || pMP2->isBad()) continue;
+                if (i2 < 0) continue;
+
+                cv::Mat x1 = pKF1->GetPose() * pMP1->GetWorldPos();
+                cv::Mat x2 = pKF2->GetPose() * pMP2->GetWorldPos();
+
+                const cv::KeyPoint &kpUn = pKF1->mvKeysUn[i];
+                const cv::KeyPoint &kpUn2 = pKF2->mvKeysUn[i2];
+
+                double X1[3], X2[3];
+                for (int k = 0; k < 3; k++) {
+                    X1[k] = x1.at<float>(k);
+                    X2[k] = x2.at<float>(k);
+                }
+
+                double residual1[2], residual2[2];
+
+                compute_residual(se3, X2, kpUn.pt.x, kpUn.pt.y, residual1);
+                compute_residual2(se3, X1, kpUn2.pt.x, kpUn2.pt.y, residual2);
+
+                double chi1 = residual1[0] * residual1[0] + residual1[1] * residual1[1];
+                chi1 /= pKF1->mvInvLevelSigma2[kpUn.octave];
+
+                double chi2 = (residual2[0] * residual2[0] + residual2[1] * residual2[1]);
+                chi2 /= pKF2->mvInvLevelSigma2[kpUn2.octave];
+
+                if (chi1 > th2 || chi2 > th2) {
+                    outliers[i] = true;
+                } else {
+                    good++;
+                }
+            }
+
+            if (good < 10) {
+                return 0;
+            }
+        }
+
+        //recover sim3
+        Converter::toG2OSim3(se3, g2oS12);
+
+        return good;
 
     }
 

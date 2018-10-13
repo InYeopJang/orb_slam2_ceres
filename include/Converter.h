@@ -53,6 +53,7 @@ public:
 
     static void toT6(const cv::Mat& SE3, double* t6);
     static void toSE3(const double* const t6, cv::Mat& SE3);
+    static void toG2OSim3(const double* const t6, g2o::Sim3 &gSim3);
 };
 
 }// namespace ORB_SLAM
