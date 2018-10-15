@@ -40,10 +40,17 @@ namespace ORB_SLAM2
 {
 
 
-    static constexpr double fx = 520.908620;
-    static constexpr double fy = 521.007327;
-    static constexpr double cx = 325.141442;
-    static constexpr double cy = 249.701764;
+    // for TUM1
+    static constexpr double fx = 517.306408;
+    static constexpr double fy = 516.469215;
+    static constexpr double cx = 318.643040;
+    static constexpr double cy = 255.313989;
+
+    // for TUM2
+//    static constexpr double fx = 520.908620;
+//    static constexpr double fy = 521.007327;
+//    static constexpr double cx = 325.141442;
+//    static constexpr double cy = 249.701764;
 
 
     template<typename T> bool compute_residual(const T* const camera,
