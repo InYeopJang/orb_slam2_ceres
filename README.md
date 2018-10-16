@@ -1,7 +1,6 @@
-# ORB-SLAM2 - For Mac
-This fork has been modified to be compatible on Mac systems. With required packages installed via Brew, this works out of the box for me.
-
-One of the main issues on MacOS was Pangolin needing to run on the main thread. Currently only the `mono_tum` executable has been modified to shift the computation onto its own thread, and keep Pangolin on the main thread. If you need this for other executables, it should be pretty straightforward following what I've done in `mono_tum.cc`.
+# ORB-SLAM2 - using ceres instead of g2o
+### MacOS compatible
+This fork has been modified to be compatible on Mac systems. MacOS edition fork from git@github.com:skylook/ORB_SLAM2_MacOS.git
 
 
 # ORB-SLAM2 - Original Text
