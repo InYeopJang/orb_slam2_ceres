@@ -26,6 +26,7 @@
 #include<Eigen/Dense>
 #include"Thirdparty/g2o/g2o/types/types_six_dof_expmap.h"
 #include"Thirdparty/g2o/g2o/types/types_seven_dof_expmap.h"
+#include <ceres/rotation.h>
 
 namespace ORB_SLAM2
 {
@@ -52,8 +53,37 @@ public:
     static std::vector<float> toQuaternion(const cv::Mat &M);
 
     static void toT6(const cv::Mat& SE3, double* t6);
+
     static void toSE3(const double* const t6, cv::Mat& SE3);
     static void toG2OSim3(const double* const t6, g2o::Sim3 &gSim3);
+
+
+    template<typename T>
+    inline static void invT6(const  T* t6, T* out) {
+        for (int i = 0; i < 3; i++) {
+            out[i] = -t6[i];
+        }
+
+        ceres::AngleAxisRotatePoint(out, t6+3, out+3);
+
+        for (int i = 3; i < 6; i++) {
+            out[i] = -out[i];
+        }
+    }
+
+    template<typename T>
+    inline static void mulT6(const T t1[6], const T t2[6], T t[6]) {
+        ceres::AngleAxisRotatePoint(t1, t2+3, t+3);
+        for (int i = 3; i < 6; i++) {
+            t[i] += t1[i];
+        }
+
+        T R1[4], R2[4], R[4];
+        ceres::AngleAxisToQuaternion(t1, R1);
+        ceres::AngleAxisToQuaternion(t2, R2);
+        ceres::QuaternionProduct(R1, R2, R);
+        ceres::QuaternionToAngleAxis(R, t);
+    }
 };
 
 }// namespace ORB_SLAM

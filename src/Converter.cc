@@ -167,6 +167,8 @@ void Converter::toT6(const cv::Mat& SE3, double* t6) {
     t6[4] = t(1);
     t6[5] = t(2);
 }
+
+
 void Converter::toSE3(const double* const t6, cv::Mat& SE3) {
 
     cv::Vec3f rod(t6[0],t6[1],t6[2]);

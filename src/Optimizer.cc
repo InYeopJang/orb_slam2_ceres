@@ -111,6 +111,71 @@ namespace ORB_SLAM2
     }
 
 
+    template<typename T> void neg3(T* v) {
+        for (int i = 0; i < 3; i++) {
+            v[i] = -v[i];
+        }
+    }
+
+    struct RelativeSEO3Error {
+
+        RelativeSEO3Error(double* ob) {
+            for (int i = 0; i < 6; i++) {
+                observed[i] = ob[i];
+            }
+        }
+
+        template <typename T>
+        bool operator()(const T* camera1,
+                        const T* camera2,
+                        T* residuals) const {
+
+            // residuals = observed * camera1 * inv(camera2)
+
+            T quat1[4], InvQuat2[4], observed_quat[4];
+
+            ceres::AngleAxisToQuaternion(camera1, quat1);
+
+            ceres::AngleAxisToQuaternion(camera2, InvQuat2);
+            neg3(InvQuat2+1);
+
+            T ob[6];
+            for (int i = 0; i < 6; i++) {
+                ob[i] = (T)observed[i];
+            }
+            ceres::AngleAxisToQuaternion(ob, observed_quat);
+
+            T tmp[4], dR[4];
+            ceres::QuaternionProduct(quat1, InvQuat2, tmp);
+            ceres::QuaternionProduct(observed_quat, tmp, dR);
+
+            ceres::QuaternionToAngleAxis(dR, residuals);
+
+            T t1[3], t2[3], t3[3], t4[3];
+            ceres::QuaternionRotatePoint(InvQuat2, camera2+3, t1);
+            neg3(t1);
+
+            ceres::QuaternionRotatePoint(quat1, t1, t2);
+            for (int i = 0; i < 3; i++) {
+                t3[i] = t2[i] + t1[i];
+            }
+
+            ceres::QuaternionRotatePoint(observed_quat, t3, t4);
+            for (int i = 0; i < 3; i++) {
+                residuals[i+3] = t4[i] + observed[i+3];
+            }
+
+        }
+
+        static ceres::CostFunction* Create(double* observed) {
+            return (new ceres::AutoDiffCostFunction<RelativeSEO3Error, 6, 6, 6>(
+                    new RelativeSEO3Error(observed)));
+        }
+
+        double observed[6];
+    };
+
+
 
     struct ReprojError {
         ReprojError(double observed_x, double observed_y)
@@ -1752,6 +1817,248 @@ int Optimizer::OptimizeSim3(KeyFrame *pKF1, KeyFrame *pKF2, vector<MapPoint *> &
         Converter::toG2OSim3(se3, g2oS12);
 
         return good;
+
+    }
+
+
+    void Optimizer::OptimizeEssentialGraph2(Map* pMap, KeyFrame* pLoopKF, KeyFrame* pCurKF,
+                                           const LoopClosing::KeyFrameAndPose &NonCorrectedSim3,
+                                           const LoopClosing::KeyFrameAndPose &CorrectedSim3,
+                                           const map<KeyFrame *, set<KeyFrame *> > &LoopConnections, const bool &bFixScale)
+    {
+
+        const vector<KeyFrame*> vpKFs = pMap->GetAllKeyFrames();
+        const vector<MapPoint*> vpMPs = pMap->GetAllMapPoints();
+
+        int N = pMap->GetMaxKFid()+1;
+
+        vector<double*> vScw(N);
+
+        vector<cv::Mat> vScw_Old(N);
+
+        const int minFeat = 100;
+
+        // Set KeyFrame vertices
+        for(size_t i=0; i < vpKFs.size(); i++)
+        {
+            KeyFrame* pKF = vpKFs[i];
+            if (pKF->isBad())
+                continue;
+
+            int kfID = pKF->mnId;
+
+            LoopClosing::KeyFrameAndPose::const_iterator it = CorrectedSim3.find(pKF);
+
+            cv::Mat mat = it != CorrectedSim3.end() ? Converter::toCvMat(it->second) : pKF->GetPose();
+            double* pose = new double[6];
+            Converter::toT6(mat, pose);
+            vScw[i] = pose;
+            vScw_Old[i] = pKF->GetPose();
+        }
+
+        ceres::Problem problem;
+        ceres::Solver::Options options = defaultOpt();
+
+        // Set Loop edges
+        for(map<KeyFrame *, set<KeyFrame *> >::const_iterator mit = LoopConnections.begin(), mend=LoopConnections.end(); mit!=mend; mit++)
+        {
+            KeyFrame* pKF = mit->first;
+            const long unsigned int nIDi = pKF->mnId;
+            const set<KeyFrame*> &spConnections = mit->second;
+
+            double* Siw = vScw[nIDi];
+            double Swi[6];
+            Converter::invT6(Siw, Swi);
+
+
+            for(set<KeyFrame*>::const_iterator sit=spConnections.begin(), send=spConnections.end(); sit!=send; sit++)
+            {
+                const long unsigned int nIDj = (*sit)->mnId;
+                if((nIDi!=pCurKF->mnId || nIDj!=pLoopKF->mnId) && pKF->GetWeight(*sit)<minFeat)
+                    continue;
+
+                double* Sjw = vScw[nIDj];
+                double Sji[6];
+                Converter::mulT6(Sjw, Swi, Sji);
+
+                ceres::LossFunction *lossfunc = new ceres::HuberLoss(0.5);
+                ceres::CostFunction *costfunc = RelativeSEO3Error::Create(Sji);
+                problem.AddResidualBlock(costfunc, lossfunc, Sjw, Siw);
+
+            }
+        }
+
+
+        // Set normal edges
+        for(size_t i=0, iend=vpKFs.size(); i<iend; i++)
+        {
+            KeyFrame* pKF = vpKFs[i];
+
+            const int nIDi = pKF->mnId;
+
+            double Swi[6];
+
+            LoopClosing::KeyFrameAndPose::const_iterator iti = NonCorrectedSim3.find(pKF);
+
+            if(iti!=NonCorrectedSim3.end())
+                Converter::toT6(Converter::toCvMat(iti->second.inverse()), Swi);
+            else
+                Converter::invT6(vScw[nIDi], Swi);
+
+            KeyFrame* pParentKF = pKF->GetParent();
+
+            // Spanning tree edge
+            if(pParentKF)
+            {
+                int nIDj = pParentKF->mnId;
+
+                double nosim[6];
+                double* Sjw = nosim;
+
+                LoopClosing::KeyFrameAndPose::const_iterator itj = NonCorrectedSim3.find(pParentKF);
+
+                if(itj!=NonCorrectedSim3.end())
+                {
+                    cv::Mat tmp = Converter::toCvMat(itj->second);
+                    Converter::toT6(tmp, Sjw);
+                }
+                else {
+                    Sjw = vScw[nIDj];
+                }
+
+                double Sji[6];
+                Converter::mulT6(Sjw, Swi, Sji);
+
+                ceres::LossFunction *lossfunc = new ceres::HuberLoss(0.5);
+                ceres::CostFunction *costfunc = RelativeSEO3Error::Create(Sji);
+                problem.AddResidualBlock(costfunc, lossfunc, vScw[nIDj], vScw[nIDi]);
+
+            }
+
+            // Loop edges
+            const set<KeyFrame*> sLoopEdges = pKF->GetLoopEdges();
+            for(set<KeyFrame*>::const_iterator sit=sLoopEdges.begin(), send=sLoopEdges.end(); sit!=send; sit++)
+            {
+                KeyFrame* pLKF = *sit;
+                if(pLKF->mnId<pKF->mnId)
+                {
+                    int nIDj = pLKF->mnId;
+
+                    double nosim[6];
+                    double* Sjw = nosim;
+
+                    LoopClosing::KeyFrameAndPose::const_iterator itj = NonCorrectedSim3.find(pLKF);
+
+                    if(itj!=NonCorrectedSim3.end())
+                    {
+                        cv::Mat tmp = Converter::toCvMat(itj->second);
+                        Converter::toT6(tmp, Sjw);
+                    }
+                    else {
+                        Sjw = vScw[nIDj];
+                    }
+
+                    double Sji[6];
+                    Converter::mulT6(Sjw, Swi, Sji);
+
+                    ceres::LossFunction *lossfunc = new ceres::HuberLoss(0.5);
+                    ceres::CostFunction *costfunc = RelativeSEO3Error::Create(Sji);
+                    problem.AddResidualBlock(costfunc, lossfunc, vScw[nIDj], vScw[nIDi]);
+                }
+            }
+
+            // Covisibility graph edges
+            const vector<KeyFrame*> vpConnectedKFs = pKF->GetCovisiblesByWeight(minFeat);
+            for(vector<KeyFrame*>::const_iterator vit=vpConnectedKFs.begin(); vit!=vpConnectedKFs.end(); vit++)
+            {
+                KeyFrame* pKFn = *vit;
+                if(pKFn && pKFn!=pParentKF && !pKF->hasChild(pKFn) && !sLoopEdges.count(pKFn))
+                {
+                    if(!pKFn->isBad() && pKFn->mnId<pKF->mnId)
+                    {
+
+                        int nIDj = pKFn->mnId;
+
+                        double nosim[6];
+                        double* Sjw = nosim;
+
+                        LoopClosing::KeyFrameAndPose::const_iterator itj = NonCorrectedSim3.find(pKFn);
+
+                        if(itj!=NonCorrectedSim3.end())
+                        {
+                            cv::Mat tmp = Converter::toCvMat(itj->second);
+                            Converter::toT6(tmp, Sjw);
+                        }
+                        else {
+                            Sjw = vScw[nIDj];
+                        }
+
+                        double Sji[6];
+                        Converter::mulT6(Sjw, Swi, Sji);
+
+                        ceres::LossFunction *lossfunc = new ceres::HuberLoss(0.5);
+                        ceres::CostFunction *costfunc = RelativeSEO3Error::Create(Sji);
+                        problem.AddResidualBlock(costfunc, lossfunc, vScw[nIDj], vScw[nIDi]);
+                    }
+                }
+            }
+        }
+
+        //solve problem
+        ceres::Solver::Summary summary;
+        ceres::Solve(options, &problem, &summary);
+
+        vector<cv::Mat> vCorrectedSwc(N);
+
+        //recover pose
+        for(size_t i=0;i<vpKFs.size();i++) {
+            KeyFrame *pKFi = vpKFs[i];
+            cv::Mat pose;
+            Converter::toSE3(vScw[pKFi->mnId], pose);
+
+            vCorrectedSwc[i] = pose.inv();
+
+            pKFi->SetPose(pose);
+        }
+
+        // Correct points. Transform to "non-optimized" reference keyframe pose and transform back with optimized pose
+        for(size_t i=0, iend=vpMPs.size(); i<iend; i++)
+        {
+            MapPoint* pMP = vpMPs[i];
+
+            if(pMP->isBad())
+                continue;
+
+            int nIDr;
+            if(pMP->mnCorrectedByKF==pCurKF->mnId)
+            {
+                nIDr = pMP->mnCorrectedReference;
+            }
+            else
+            {
+                KeyFrame* pRefKF = pMP->GetReferenceKeyFrame();
+                nIDr = pRefKF->mnId;
+            }
+
+            cv::Mat P3Dw = pMP->GetWorldPos();
+
+            cv::Mat oldpose = vScw_Old[nIDr];
+
+            cv::Mat newpose;
+            Converter::toSE3(vScw[nIDr], newpose);
+
+            cv::Mat newP3Dw = newpose * oldpose.inv() * P3Dw;
+
+            pMP->SetWorldPos(newP3Dw);
+
+            pMP->UpdateNormalAndDepth();
+        }
+
+
+        //free double[6]
+        for (int i = 0; i < vScw.size(); i++) {
+            delete vScw[i];
+        }
 
     }
 
