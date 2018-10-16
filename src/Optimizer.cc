@@ -111,12 +111,6 @@ namespace ORB_SLAM2
     }
 
 
-    template<typename T> void neg3(T* v) {
-        for (int i = 0; i < 3; i++) {
-            v[i] = -v[i];
-        }
-    }
-
     struct RelativeSEO3Error {
 
         RelativeSEO3Error(double* ob) {
@@ -131,40 +125,14 @@ namespace ORB_SLAM2
                         T* residuals) const {
 
             // residuals = observed * camera1 * inv(camera2)
-
-            T quat1[4], InvQuat2[4], observed_quat[4];
-
-            ceres::AngleAxisToQuaternion(camera1, quat1);
-
-            ceres::AngleAxisToQuaternion(camera2, InvQuat2);
-            neg3(InvQuat2+1);
-
-            T ob[6];
+            T invCamera2[6], ob[6], tmp[6];
             for (int i = 0; i < 6; i++) {
                 ob[i] = (T)observed[i];
             }
-            ceres::AngleAxisToQuaternion(ob, observed_quat);
 
-            T tmp[4], dR[4];
-            ceres::QuaternionProduct(quat1, InvQuat2, tmp);
-            ceres::QuaternionProduct(observed_quat, tmp, dR);
-
-            ceres::QuaternionToAngleAxis(dR, residuals);
-
-            T t1[3], t2[3], t3[3], t4[3];
-            ceres::QuaternionRotatePoint(InvQuat2, camera2+3, t1);
-            neg3(t1);
-
-            ceres::QuaternionRotatePoint(quat1, t1, t2);
-            for (int i = 0; i < 3; i++) {
-                t3[i] = t2[i] + t1[i];
-            }
-
-            ceres::QuaternionRotatePoint(observed_quat, t3, t4);
-            for (int i = 0; i < 3; i++) {
-                residuals[i+3] = t4[i] + observed[i+3];
-            }
-
+            Converter::invT6(camera2, invCamera2);
+            Converter::mulT6(camera1, invCamera2, tmp);
+            Converter::mulT6(ob, tmp, residuals);
         }
 
         static ceres::CostFunction* Create(double* observed) {
